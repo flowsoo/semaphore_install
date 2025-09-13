@@ -144,7 +144,7 @@ Description=Semaphore Ansible UI
 After=network.target mariadb.service
 
 [Service]
-ExecStart=$SEMAPHORE_BIN server -config $SEMAPHORE_CONFIG
+ExecStart=$SEMAPHORE_BIN server --config $SEMAPHORE_CONFIG
 Restart=always
 User=root
 Environment=SEMAPHORE_CONFIG=$SEMAPHORE_CONFIG
