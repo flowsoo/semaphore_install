@@ -32,7 +32,10 @@ apt install -y ansible
 
 # === iii) Install required packages ===
 echo "### iii) Installing required packages"
-apt install -y curl git mariadb-server mariadb-client expect jq
+apt install -y curl git mariadb-server mariadb-client expect jq ufw
+
+# Open Port 3000
+ufw allow 3000
 
 # === iv) Secure MariaDB ===
 echo "### iv) Securing MariaDB"
