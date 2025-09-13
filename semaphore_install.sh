@@ -36,6 +36,7 @@ apt install -y curl git mariadb-server mariadb-client expect jq ufw
 
 # Open Port 3000
 ufw allow 3000
+ufw allow 3306
 
 # === iv) Secure MariaDB ===
 echo "### iv) Securing MariaDB"
