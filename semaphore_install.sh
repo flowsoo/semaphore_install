@@ -2,40 +2,40 @@
 
 set -e
 
-# Variables
+# === VARIABLES ===
 ANSIBLE_USER="ansible"
 ANSIBLE_PASSWORD="AnsiblePass123!"
+
 SEMAPHORE_DB="semaphore"
 SEMAPHORE_DB_USER="semaphore"
 SEMAPHORE_DB_PASSWORD="SemaphoreDBPass123!"
 MYSQL_ROOT_PASSWORD="MySQLRootPass123!"
-SEMAPHORE_DIR="/opt/semaphore"
-SEMAPHORE_CONFIG="/etc/semaphore/config.json"
 
-# i) Create an Ansible user with password
+SEMAPHORE_DIR="/opt/semaphore"
+SEMAPHORE_BIN="$SEMAPHORE_DIR/semaphore"
+SEMAPHORE_CONFIG="/etc/semaphore/config.json"
+SEMAPHORE_PORT="3000"
+
+ADMIN_USER="admin"
+ADMIN_EMAIL="admin@example.com"
+ADMIN_PASS="admin123"
+
+# === i) Create Ansible user ===
 echo "### i) Creating Ansible user"
-useradd -m -s /bin/bash $ANSIBLE_USER
+useradd -m -s /bin/bash $ANSIBLE_USER || true
 echo "$ANSIBLE_USER:$ANSIBLE_PASSWORD" | chpasswd
 
-# ii) Install Ansible
-echo "### ii) Installing Ansible"
+# === ii) Install Ansible ===
+echo "### ii) Installing Ansible (from official apt repo)"
 apt update
-apt install -y software-properties-common
-add-apt-repository --yes --update ppa:ansible/ansible
 apt install -y ansible
 
-# iii) Install all required packages (use mariadb for the database)
+# === iii) Install required packages ===
 echo "### iii) Installing required packages"
-apt update
 apt install -y curl git mariadb-server mariadb-client expect jq
 
-# iv) Install mysql (MariaDB already covers this step)
-echo "### iv) Ensuring MariaDB is installed (mysql alternative)"
-# Already handled in step iii
-
-# v) Secure mysql, filling out all fields automatically
-echo "### v) Securing MariaDB"
-
+# === iv) Secure MariaDB ===
+echo "### iv) Securing MariaDB"
 SECURE_MYSQL=$(expect -c "
 set timeout 10
 spawn mysql_secure_installation
@@ -69,67 +69,78 @@ expect eof
 
 echo "$SECURE_MYSQL"
 
-# vi) Create the required database and user for semaphore
-echo "### vi) Creating Semaphore database and user"
-mysql -u root -p$MYSQL_ROOT_PASSWORD <<MYSQL_SCRIPT
-CREATE DATABASE $SEMAPHORE_DB;
-CREATE USER '$SEMAPHORE_DB_USER'@'localhost' IDENTIFIED BY '$SEMAPHORE_DB_PASSWORD';
+# === v) Create Semaphore DB and user ===
+echo "### v) Creating Semaphore DB and user"
+mysql -u root -p"$MYSQL_ROOT_PASSWORD" <<MYSQL_SCRIPT
+CREATE DATABASE IF NOT EXISTS $SEMAPHORE_DB;
+CREATE USER IF NOT EXISTS '$SEMAPHORE_DB_USER'@'localhost' IDENTIFIED BY '$SEMAPHORE_DB_PASSWORD';
 GRANT ALL PRIVILEGES ON $SEMAPHORE_DB.* TO '$SEMAPHORE_DB_USER'@'localhost';
 FLUSH PRIVILEGES;
 MYSQL_SCRIPT
 
-# vii) Download and extract the latest stable release of semaphore that ends in _linux_amd64.tar.gz
-echo "### vii) Downloading and extracting Semaphore release (ending in _linux_amd64.tar.gz)"
-
-DOWNLOAD_URL=$(curl -s https://api.github.com/repos/semaphoreui/semaphore/releases | jq -r '
-    .[] 
-    | .assets[] 
-    | select(.name | endswith("_linux_amd64.tar.gz")) 
-    | .browser_download_url' | head -n1)
+# === vi) Download Semaphore ===
+echo "### vi) Downloading Semaphore latest release"
+DOWNLOAD_URL=$(curl -s https://api.github.com/repos/semaphoreui/semaphore/releases/latest | jq -r '.assets[] | select(.name | endswith("_linux_amd64.tar.gz")) | .browser_download_url')
 
 if [ -z "$DOWNLOAD_URL" ]; then
-    echo "ERROR: Could not find suitable Semaphore release."
+    echo "ERROR: Semaphore download URL not found."
     exit 1
 fi
 
-echo "Found release: $DOWNLOAD_URL"
-
 mkdir -p $SEMAPHORE_DIR
 cd /tmp
-curl -sL "$DOWNLOAD_URL" -o semaphore_linux_amd64.tar.gz
+curl -sL "$DOWNLOAD_URL" -o semaphore.tar.gz
+tar -xzf semaphore.tar.gz -C $SEMAPHORE_DIR
+chmod +x $SEMAPHORE_BIN
+rm semaphore.tar.gz
 
-echo "Extracting to $SEMAPHORE_DIR"
-tar -xzf semaphore_linux_amd64.tar.gz -C $SEMAPHORE_DIR
-rm semaphore_linux_amd64.tar.gz
-chmod +x $SEMAPHORE_DIR/semaphore
+# === vii) Create config.json manually ===
+echo "### vii) Creating Semaphore config.json"
+mkdir -p "$(dirname "$SEMAPHORE_CONFIG")"
 
-# viii) Run the setup script, and fill out the interactive fields as required
-echo "### viii) Running Semaphore setup"
-cat <<EOF | $SEMAPHORE_DIR/semaphore setup
-$SEMAPHORE_DB_USER
-$SEMAPHORE_DB_PASSWORD
-localhost
-3306
-$SEMAPHORE_DB
-admin
-admin
-admin@example.com
-admin123
+cat <<EOF > "$SEMAPHORE_CONFIG"
+{
+  "mysql": {
+    "host": "127.0.0.1:3306",
+    "user": "$SEMAPHORE_DB_USER",
+    "pass": "$SEMAPHORE_DB_PASSWORD",
+    "name": "$SEMAPHORE_DB",
+    "options": {
+      "interpolateParams": "true"
+    }
+  },
+  "dialect": "mysql",
+  "port": ":$SEMAPHORE_PORT",
+  "tmp_path": "/tmp/semaphore",
+  "cookie_hash": "$(head -c 16 /dev/urandom | base64)",
+  "cookie_encryption": "$(head -c 16 /dev/urandom | base64)",
+  "email_alert": false,
+  "telegram_alert": false,
+  "slack_alert": false,
+  "ldap_enable": false,
+  "web_host": "",
+  "playbook_path": "/tmp/semaphore"
+}
 EOF
 
-# ix) Start Semaphore
-echo "### ix) Starting Semaphore"
-$SEMAPHORE_DIR/semaphore -config $SEMAPHORE_CONFIG &
+# === viii) Run DB migration ===
+echo "### viii) Migrating DB"
+/opt/semaphore/semaphore migrate --config "$SEMAPHORE_CONFIG"
 
-# x) Create the systemd service file to run semaphore
-echo "### x) Creating systemd service"
+# === ix) Create admin user ===
+echo "### ix) Creating Semaphore admin user"
+/opt/semaphore/semaphore user add --config "$SEMAPHORE_CONFIG" \
+  --admin --login "$ADMIN_USER" --name "$ADMIN_USER" --email "$ADMIN_EMAIL" --password "$ADMIN_PASS"
+
+# === x) Create systemd service ===
+echo "### x) Creating systemd service for Semaphore"
 cat <<EOF > /etc/systemd/system/semaphore.service
 [Unit]
 Description=Semaphore Ansible UI
 After=network.target mariadb.service
 
 [Service]
-ExecStart=$SEMAPHORE_DIR/semaphore -config $SEMAPHORE_CONFIG
+ExecStart=$SEMAPHORE_BIN -config $SEMAPHORE_CONFIG
 Restart=always
 User=root
 Environment=SEMAPHORE_CONFIG=$SEMAPHORE_CONFIG
@@ -143,6 +154,7 @@ systemctl daemon-reload
 systemctl enable semaphore
 systemctl start semaphore
 
-echo "Semaphore installation complete."
-echo "Access the web UI at http://<your-server-ip>:3000"
-echo "Login with: admin / admin123"
+echo
+echo "✅ Semaphore installation complete."
+echo "🌐 Access the web UI at: http://<your-server-ip>:3000"
+echo "👤 Login with: $ADMIN_USER / $ADMIN_PASS"
