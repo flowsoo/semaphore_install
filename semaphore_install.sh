@@ -158,6 +158,6 @@ systemctl enable semaphore
 systemctl start semaphore
 
 echo
-echo "✅ Semaphore installation complete."
-echo "🌐 Access the web UI at: http://<your-server-ip>:3000"
-echo "👤 Login with: $ADMIN_USER / $ADMIN_PASS"
+echo "Semaphore installation complete."
+echo "Access the web UI at: http://<your-server-ip>:3000"
+echo "Login with: $ADMIN_USER / $ADMIN_PASS"
